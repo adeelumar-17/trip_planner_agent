@@ -1,0 +1,23 @@
+# Virtual environment
+venv/
+
+# Environment files with secrets
+.env
+
+# Local reports
+reports/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Test scripts (not needed in deployment)
+test_*.py
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+.DS_Store
