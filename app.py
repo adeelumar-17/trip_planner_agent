@@ -10,6 +10,7 @@ Features:
 
 import os
 import uuid
+import urllib.parse
 import streamlit as st
 from datetime import date, timedelta
 
@@ -325,11 +326,16 @@ if plan_button:
                 st.metric("🔁 Budget Retries", retries)
 
             # Accommodation
+            accom_name = selected_accom.get("name", "N/A")
+            accom_address = selected_accom.get("address", destination)
+            accom_maps_url = selected_accom.get("maps_url") or f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote_plus(f'{accom_name}, {accom_address}')}"
+
             st.markdown("### 🏨 Selected Accommodation")
             st.info(
-                f"**{selected_accom.get('name', 'N/A')}** — "
+                f"**[{accom_name}]({accom_maps_url})** — "
                 f"${selected_accom.get('estimated_price_per_night', 0):.2f}/night "
-                f"(${total_cost:.2f} total)"
+                f"(${total_cost:.2f} total)\n\n"
+                f"📍 **Address:** {accom_address} ([View on Google Maps 🗺️]({accom_maps_url}))"
             )
 
             # Day-by-day itinerary
@@ -349,6 +355,9 @@ if plan_button:
                 act_cost = activity.get("estimated_cost", 0)
                 cost_text = f"${act_cost:.2f}" if act_cost > 0 else "Free entry"
 
+                act_name = activity.get("name", "N/A")
+                maps_url = activity.get("maps_url") or f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote_plus(f'{act_name}, {location}')}"
+
                 html_content = (
                     f'<div class="{card_class}">'
                     f'<div style="display: flex; justify-content: space-between; align-items: center;">'
@@ -357,8 +366,8 @@ if plan_button:
                     f'</div>'
                     f'<p style="color: #555; font-size: 0.9rem; margin: 0.4rem 0;">🌡️ {day.get("weather", "N/A")}</p>'
                     f'<div style="background: #f8f9fa; padding: 0.75rem; border-radius: 8px; margin: 0.5rem 0; border: 1px solid #e9ecef;">'
-                    f'<p style="margin: 0; font-size: 1.05rem; color: #2c3e50;"><strong>🎯 {activity.get("name", "N/A")}</strong></p>'
-                    f'<p style="color: #666; font-size: 0.88rem; margin: 0.25rem 0;">📍 <strong>Location:</strong> {location}</p>'
+                    f'<p style="margin: 0; font-size: 1.05rem; color: #2c3e50;"><strong>🎯 <a href="{maps_url}" target="_blank" style="color: #2c3e50; text-decoration: underline;">{act_name}</a></strong></p>'
+                    f'<p style="color: #666; font-size: 0.88rem; margin: 0.25rem 0;">📍 <strong>Location:</strong> {location} (<a href="{maps_url}" target="_blank" style="color: #667eea; text-decoration: underline;">View on Google Maps 🗺️</a>)</p>'
                     f'<p style="color: #27ae60; font-size: 0.88rem; margin: 0.25rem 0; font-weight: 600;">💵 <strong>Est. Activity Cost:</strong> {cost_text}</p>'
                     f'<p style="color: #7f8c8d; font-size: 0.85rem; margin-top: 0.4rem; font-style: italic;">{activity.get("reason", "")}</p>'
                     f'</div>'

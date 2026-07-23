@@ -21,6 +21,12 @@ def _get_geoapify_key() -> str:
 def _get_tavily_key() -> str:
     return os.getenv("TAVILY_API_KEY", "")
 
+def _make_maps_url(name: str, address: str) -> str:
+    """Generate a clean Google Maps search URL."""
+    import urllib.parse
+    query = f"{name}, {address}".strip(", ")
+    return f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote_plus(query)}"
+
 TIMEOUT = 15  # seconds for all HTTP calls
 
 # ---------------------------------------------------------------------------
@@ -177,14 +183,16 @@ def _enrich_with_tavily_prices(
     enriched = []
     for place in places:
         name = place.get("name", "Unnamed")
+        addr = place.get("address", destination)
         price = _extract_price_for_place(name, pricing_snippets, per_night_budget, place)
 
         enriched.append({
             "name": name,
-            "address": place.get("address", ""),
+            "address": addr,
             "category": place.get("category", "accommodation"),
             "estimated_price_per_night": price,
             "total_estimated": round(price * num_days, 2),
+            "maps_url": _make_maps_url(name, addr),
             "source": "geoapify+tavily" if pricing_results else "geoapify",
         })
     return enriched
@@ -319,13 +327,15 @@ def search_activities(
             seen_names.add(name.lower())
             cat = place.get("category", "")
             all_cats = place.get("all_categories", [cat])
+            addr = place.get("address", destination)
             interest_results.append({
                 "name": name,
-                "address": place.get("address", destination),
+                "address": addr,
                 "category": cat,
                 "interest": key,
                 "estimated_cost": _estimate_activity_cost(cat),
                 "indoor": _is_indoor(all_cats),
+                "maps_url": _make_maps_url(name, addr),
                 "source": "geoapify",
             })
 
@@ -406,11 +416,11 @@ def _extract_places_from_search_snippets(
 
     prompt = f"""Extract up to {limit} specific tourist attractions, venues, or places for the interest '{interest}' in '{destination}' from the search results below.
 
-CRITICAL INSTRUCTIONS:
-- Do NOT output blog titles or headlines (e.g. '25 Best Museums in New York').
-- Output ONLY real, specific venue/place names (e.g. 'Metropolitan Museum of Art', 'Central Park', 'Katz\'s Delicatessen').
-- Provide a specific neighborhood, street, or area in {destination} for each place.
-- Provide an estimated ticket/activity entry cost per person in USD (float, e.g. 25.0, or 0.0 if free/public).
+STRICT MANDATORY RULES:
+1. NEVER output blog titles, headlines, or listicle names (e.g. '10 Best Museums in NY', 'Top Things to Do in London', '25 Best Museums in New York You Can\'t Miss').
+2. Output ONLY the exact, official name of real physical venues/attractions (e.g. 'British Museum', 'Natural History Museum', 'National Gallery', 'Tate Modern').
+3. Provide a specific descriptive address, street, or neighborhood in {destination} for each place.
+4. Provide an estimated ticket/activity entry cost per person in USD (float, e.g. 25.0, or 0.0 if free/public).
 
 SEARCH RESULTS:
 {text}
@@ -418,7 +428,7 @@ SEARCH RESULTS:
 Return ONLY a JSON array of objects with exact keys: "name", "address", "estimated_cost", "indoor".
 Example format:
 [
-  {{"name": "Metropolitan Museum of Art", "address": "1000 5th Ave, Manhattan, New York", "estimated_cost": 30.0, "indoor": true}}
+  {{"name": "British Museum", "address": "Great Russell St, Bloomsbury, London", "estimated_cost": 0.0, "indoor": true}}
 ]"""
 
     try:
@@ -442,12 +452,20 @@ Example format:
         parsed = []
         for item in items:
             if isinstance(item, dict) and item.get("name"):
+                name = item["name"]
+                # Skip if name looks like a headline
+                name_lower = name.lower()
+                if any(kw in name_lower for kw in ["best museums", "things to do", "places to visit", "top 10", "top 25", "can't miss"]):
+                    continue
+
+                addr = item.get("address", destination)
                 parsed.append({
-                    "name": item["name"],
-                    "address": item.get("address", destination),
+                    "name": name,
+                    "address": addr,
                     "category": f"tavily.{interest}",
                     "estimated_cost": float(item.get("estimated_cost", 15.0)),
                     "indoor": bool(item.get("indoor", True)),
+                    "maps_url": _make_maps_url(name, addr),
                     "source": "tavily",
                 })
         if parsed:
@@ -467,6 +485,7 @@ Example format:
             "category": f"tavily.{interest}",
             "estimated_cost": 15.0,
             "indoor": any(kw in clean_title.lower() for kw in indoor_keywords),
+            "maps_url": _make_maps_url(clean_title, destination),
             "source": "tavily",
         })
     return enriched
@@ -499,13 +518,16 @@ def _geoapify_places(
         for feat in features:
             props = feat.get("properties", {})
             cats = props.get("categories", [])
+            name = props.get("name", props.get("address_line1", "Unnamed"))
+            addr = props.get("formatted", props.get("address_line1", ""))
             places.append({
-                "name": props.get("name", props.get("address_line1", "Unnamed")),
-                "address": props.get("formatted", props.get("address_line1", "")),
+                "name": name,
+                "address": addr,
                 "category": cats[0] if cats else "",
                 "all_categories": cats,
                 "lat": props.get("lat"),
                 "lon": props.get("lon"),
+                "maps_url": _make_maps_url(name, addr),
             })
         return places
     except requests.RequestException:
@@ -546,6 +568,7 @@ def _tavily_accommodation_fallback(
             "category": "accommodation",
             "estimated_price_per_night": price,
             "total_estimated": round(price * num_days, 2),
+            "maps_url": _make_maps_url(title, destination),
             "source": "tavily",
             "url": r.get("url", ""),
         })
@@ -555,26 +578,16 @@ def _tavily_accommodation_fallback(
 def _tavily_activities_fallback(
     destination: str, interests: list[str], max_results: int
 ) -> list[dict]:
-    """Use Tavily web search as a fallback for activities."""
+    """Use Tavily web search + LLM extraction as a fallback for activities."""
     interests_str = ", ".join(interests) if interests else "sightseeing"
     results = _tavily_search(
-        f"top things to do in {destination}: {interests_str}",
+        f"top attractions places to visit in {destination}: {interests_str}",
         max_results,
     )
-    enriched = []
-    indoor_keywords = {"museum", "gallery", "mall", "restaurant", "cafe", "cinema", "spa", "aquarium", "indoor"}
-    for r in results:
-        title = r.get("title", "Activity")
-        is_indoor = any(kw in title.lower() for kw in indoor_keywords)
-        enriched.append({
-            "name": title,
-            "address": destination,
-            "category": "activity",
-            "indoor": is_indoor,
-            "source": "tavily",
-            "url": r.get("url", ""),
-        })
-    return enriched
+    if not results:
+        return []
+
+    return _extract_places_from_search_snippets(destination, interests_str, results, max_results)
 
 
 def _tavily_search(query: str, max_results: int = 5) -> list[dict]:
