@@ -259,14 +259,14 @@ def _estimate_accommodation_price(place: dict, per_night_budget: float) -> float
 
 
 # ---------------------------------------------------------------------------
-# 4. ACTIVITIES — Geoapify Places API (with Tavily fallback)
+# 4. ACTIVITIES — Per-interest search for variety (Geoapify + Tavily)
 # ---------------------------------------------------------------------------
 
 INTEREST_TO_CATEGORIES = {
     "hiking": "natural,natural.forest,leisure.park",
-    "museums": "entertainment.museum,entertainment.culture",
+    "museums": "entertainment.museum,entertainment.culture,entertainment.gallery,building.historic,tourism.sights",
     "food": "catering.restaurant,catering.cafe,catering.fast_food",
-    "shopping": "commercial.shopping_mall,commercial.marketplace",
+    "shopping": "commercial.shopping_mall,commercial.marketplace,commercial",
     "nightlife": "entertainment.nightclub,catering.bar,catering.pub",
     "history": "tourism.sights,heritage,building.historic",
     "nature": "natural,natural.water,leisure.park,natural.forest",
@@ -283,7 +283,7 @@ INDOOR_CATEGORIES = {
     "commercial.shopping_mall", "catering.restaurant", "catering.cafe",
     "catering.fast_food", "catering.bar", "catering.pub", "catering",
     "entertainment.cinema", "leisure.spa", "leisure.fitness_centre",
-    "service.beauty", "entertainment.aquarium",
+    "service.beauty", "entertainment.aquarium", "building.historic", "heritage",
 }
 
 
@@ -293,34 +293,111 @@ def search_activities(
 ) -> list[dict]:
     """Search for activities matching user interests.
 
-    Tries Geoapify first; falls back to Tavily if results are thin (< 3).
-    Each result includes an `indoor` boolean for weather-swap logic.
+    Searches each interest SEPARATELY via Geoapify to guarantee variety,
+    then supplements with Tavily for any interest with thin results.
+    Each result includes an `indoor` boolean for weather-swap logic
+    and an `interest` label showing which interest it belongs to.
     """
-    categories_set: set[str] = set()
+    per_interest = max(max_results // max(len(interests), 1), 3)
+    all_results: list[dict] = []
+    seen_names: set[str] = set()
+
     for interest in interests:
         key = interest.lower().strip()
-        if key in INTEREST_TO_CATEGORIES:
-            categories_set.update(INTEREST_TO_CATEGORIES[key].split(","))
-        else:
-            categories_set.update(["tourism.sights", "entertainment", "leisure.park"])
+        categories = INTEREST_TO_CATEGORIES.get(
+            key, "tourism.sights,entertainment,leisure.park"
+        )
 
-    categories_str = ",".join(sorted(categories_set))
-    results = _geoapify_places(lat, lon, categories_str, max_results)
+        # Search Geoapify for this specific interest
+        geo_results = _geoapify_places(lat, lon, categories, per_interest)
 
-    if results and len(results) >= 3:
-        enriched = []
-        for place in results:
+        interest_results = []
+        for place in geo_results:
+            name = place.get("name", "Unnamed")
+            if name.lower() in seen_names or name == "Unnamed":
+                continue
+            seen_names.add(name.lower())
             cat = place.get("category", "")
-            enriched.append({
-                "name": place.get("name", "Unnamed"),
+            all_cats = place.get("all_categories", [cat])
+            interest_results.append({
+                "name": name,
                 "address": place.get("address", ""),
                 "category": cat,
-                "indoor": any(ic in cat for ic in INDOOR_CATEGORIES),
+                "interest": key,
+                "indoor": _is_indoor(all_cats),
                 "source": "geoapify",
             })
-        return enriched
 
-    return _tavily_activities_fallback(destination, interests, max_results)
+        # If Geoapify returned < 2 for this interest, supplement with Tavily
+        if len(interest_results) < 2:
+            tavily_extras = _tavily_interest_search(destination, key, per_interest)
+            for item in tavily_extras:
+                if item["name"].lower() not in seen_names:
+                    seen_names.add(item["name"].lower())
+                    item["interest"] = key
+                    interest_results.append(item)
+
+        all_results.extend(interest_results)
+
+    # If we still have very few results overall, do a broad Tavily fallback
+    if len(all_results) < 3:
+        fallback = _tavily_activities_fallback(destination, interests, max_results)
+        for item in fallback:
+            if item["name"].lower() not in seen_names:
+                seen_names.add(item["name"].lower())
+                all_results.append(item)
+
+    return all_results[:max_results]
+
+
+def _is_indoor(categories: list[str] | str) -> bool:
+    """Check if category string or list indicates an indoor venue."""
+    if isinstance(categories, str):
+        categories = [categories]
+    for cat in categories:
+        if any(ic in cat for ic in INDOOR_CATEGORIES):
+            return True
+    return False
+
+
+def _tavily_interest_search(
+    destination: str, interest: str, max_results: int = 5
+) -> list[dict]:
+    """Use Tavily to find activities for a specific interest."""
+    query = f"top places to visit for {interest} in {destination}"
+    results = _tavily_search(query, max_results)
+
+    junk_words = {"definition", "meaning", "forum", "shop now", "buy", "official store", "dictionary", "wikipedia"}
+    indoor_keywords = {
+        "museum", "gallery", "mall", "restaurant", "cafe", "cinema",
+        "spa", "aquarium", "indoor", "theater", "theatre", "bar",
+    }
+    outdoor_keywords = {
+        "park", "trail", "hike", "beach", "garden", "mountain",
+        "lake", "river", "outdoor", "walk", "nature",
+    }
+
+    enriched = []
+    for r in results:
+        title = r.get("title", "Activity").strip()
+        title_lower = title.lower()
+        if any(jw in title_lower for jw in junk_words):
+            continue
+
+        is_indoor = any(kw in title_lower for kw in indoor_keywords)
+        is_outdoor = any(kw in title_lower for kw in outdoor_keywords)
+        if not is_indoor and not is_outdoor:
+            is_indoor = interest in {"museums", "food", "shopping", "nightlife", "art", "wellness"}
+
+        enriched.append({
+            "name": title,
+            "address": destination,
+            "category": f"tavily.{interest}",
+            "indoor": is_indoor,
+            "source": "tavily",
+            "url": r.get("url", ""),
+        })
+    return enriched
 
 
 # ---------------------------------------------------------------------------

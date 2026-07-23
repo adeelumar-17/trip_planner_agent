@@ -151,17 +151,25 @@ def search_activities_node(state: dict) -> dict:
 
     results = search_activities(lat, lon, destination, interests)
     indoor_count = sum(1 for r in results if r.get("indoor"))
-    source = results[0]["source"] if results else "none"
+    outdoor_count = len(results) - indoor_count
+    sources = set(r.get("source", "unknown") for r in results)
+
+    # Per-interest breakdown
+    interest_counts = {}
+    for r in results:
+        i = r.get("interest", "other")
+        interest_counts[i] = interest_counts.get(i, 0) + 1
+    breakdown = ", ".join(f"{k}: {v}" for k, v in interest_counts.items())
 
     return {
         "activity_options": results,
         "tool_calls_log": [{
             "tool": "search_activities",
             "input": {"destination": destination, "interests": interests},
-            "result_summary": f"Found {len(results)} activities ({indoor_count} indoor) via {source}",
+            "result_summary": f"Found {len(results)} activities ({indoor_count} indoor, {outdoor_count} outdoor) via {'+'.join(sources)} — {breakdown}",
         }],
         "decision_log": [
-            f"🎯 Found {len(results)} activities matching {interests} — {indoor_count} are indoor (useful for rain days)"
+            f"🎯 Found {len(results)} activities — {breakdown} — {indoor_count} indoor, {outdoor_count} outdoor"
         ],
     }
 
