@@ -186,6 +186,7 @@ RULES:
 3. Pick ONE accommodation that fits the budget for the entire stay (same hotel/hostel each night).
 4. Distribute activities across days — don't repeat the same activity.
 5. If weather is nice, prefer outdoor activities.
+6. Provide the exact venue name, specific location/address, and realistic estimated activity cost per person in USD for each activity.
 
 Return ONLY valid JSON with this exact structure (no markdown, no explanation):
 {
@@ -193,7 +194,12 @@ Return ONLY valid JSON with this exact structure (no markdown, no explanation):
   "days": {
     "YYYY-MM-DD": {
       "weather": "description (temp_min°C - temp_max°C)",
-      "activity": {"name": "...", "reason": "..."},
+      "activity": {
+        "name": "Exact Name of Place/Venue",
+        "location": "Address or Neighborhood in destination",
+        "estimated_cost": 25.0,
+        "reason": "..."
+      },
       "is_weather_swap": false
     }
   },
@@ -382,8 +388,11 @@ def generate_report_node(state: dict) -> dict:
         activity = day.get("activity", {})
         weather = day.get("weather", "N/A")
         swap_marker = " 🔄" if day.get("is_weather_swap") else ""
+        cost = activity.get("estimated_cost", 0)
+        cost_str = f"${cost:.2f}" if cost > 0 else "Free"
+        location_str = activity.get("location", activity.get("address", "N/A"))
         table_rows.append(
-            f"| {date_str} | {weather} | {activity.get('name', 'N/A')}{swap_marker} | {activity.get('reason', '')} |"
+            f"| {date_str} | {weather} | {activity.get('name', 'N/A')}{swap_marker} | {location_str} | {cost_str} | {activity.get('reason', '')} |"
         )
     itinerary_table = "\n".join(table_rows) if table_rows else "| No itinerary data available |"
 
@@ -446,8 +455,8 @@ def generate_report_node(state: dict) -> dict:
 
 **Accommodation:** {selected_accom.get('name', 'N/A')} — ${selected_accom.get('estimated_price_per_night', 0):.2f}/night (${selected_accom.get('total_estimated', 0):.2f} total)
 
-| Date | Weather | Activity | Reason |
-|------|---------|----------|--------|
+| Date | Weather | Activity | Location | Est. Cost | Reason |
+|------|---------|----------|----------|-----------|--------|
 {itinerary_table}
 
 > 🔄 = Activity was swapped due to bad weather

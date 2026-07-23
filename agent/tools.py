@@ -321,9 +321,10 @@ def search_activities(
             all_cats = place.get("all_categories", [cat])
             interest_results.append({
                 "name": name,
-                "address": place.get("address", ""),
+                "address": place.get("address", destination),
                 "category": cat,
                 "interest": key,
+                "estimated_cost": _estimate_activity_cost(cat),
                 "indoor": _is_indoor(all_cats),
                 "source": "geoapify",
             })
@@ -350,6 +351,24 @@ def search_activities(
     return all_results[:max_results]
 
 
+def _estimate_activity_cost(category: str) -> float:
+    """Heuristic cost estimate per person for activity category in USD."""
+    cat_lower = category.lower()
+    if "museum" in cat_lower or "gallery" in cat_lower or "culture" in cat_lower:
+        return 20.0
+    elif "restaurant" in cat_lower or "cafe" in cat_lower or "pub" in cat_lower or "catering" in cat_lower:
+        return 25.0
+    elif "nightclub" in cat_lower or "bar" in cat_lower:
+        return 30.0
+    elif "theme_park" in cat_lower or "zoo" in cat_lower or "aquarium" in cat_lower:
+        return 40.0
+    elif "spa" in cat_lower or "beauty" in cat_lower or "fitness" in cat_lower:
+        return 50.0
+    elif "park" in cat_lower or "natural" in cat_lower or "beach" in cat_lower or "sights" in cat_lower or "historic" in cat_lower:
+        return 0.0
+    return 15.0
+
+
 def _is_indoor(categories: list[str] | str) -> bool:
     """Check if category string or list indicates an indoor venue."""
     if isinstance(categories, str):
@@ -363,39 +382,92 @@ def _is_indoor(categories: list[str] | str) -> bool:
 def _tavily_interest_search(
     destination: str, interest: str, max_results: int = 5
 ) -> list[dict]:
-    """Use Tavily to find activities for a specific interest."""
-    query = f"top places to visit for {interest} in {destination}"
+    """Use Tavily + LLM extraction to find clean venue names, locations, and costs for a specific interest."""
+    query = f"top places attractions to visit for {interest} in {destination}"
     results = _tavily_search(query, max_results)
+    if not results:
+        return []
 
-    junk_words = {"definition", "meaning", "forum", "shop now", "buy", "official store", "dictionary", "wikipedia"}
-    indoor_keywords = {
-        "museum", "gallery", "mall", "restaurant", "cafe", "cinema",
-        "spa", "aquarium", "indoor", "theater", "theatre", "bar",
-    }
-    outdoor_keywords = {
-        "park", "trail", "hike", "beach", "garden", "mountain",
-        "lake", "river", "outdoor", "walk", "nature",
-    }
+    return _extract_places_from_search_snippets(destination, interest, results, max_results)
 
+
+def _extract_places_from_search_snippets(
+    destination: str, interest: str, results: list[dict], limit: int = 4
+) -> list[dict]:
+    """Use LLM to parse web search snippets and extract clean place names, addresses, estimated costs, and indoor status."""
+    import json
+
+    snippets = []
+    for r in results:
+        t = r.get("title", "")
+        c = r.get("content", "")
+        snippets.append(f"Title: {t}\nSnippet: {c}")
+    text = "\n---\n".join(snippets)
+
+    prompt = f"""Extract up to {limit} specific tourist attractions, venues, or places for the interest '{interest}' in '{destination}' from the search results below.
+
+CRITICAL INSTRUCTIONS:
+- Do NOT output blog titles or headlines (e.g. '25 Best Museums in New York').
+- Output ONLY real, specific venue/place names (e.g. 'Metropolitan Museum of Art', 'Central Park', 'Katz\'s Delicatessen').
+- Provide a specific neighborhood, street, or area in {destination} for each place.
+- Provide an estimated ticket/activity entry cost per person in USD (float, e.g. 25.0, or 0.0 if free/public).
+
+SEARCH RESULTS:
+{text}
+
+Return ONLY a JSON array of objects with exact keys: "name", "address", "estimated_cost", "indoor".
+Example format:
+[
+  {{"name": "Metropolitan Museum of Art", "address": "1000 5th Ave, Manhattan, New York", "estimated_cost": 30.0, "indoor": true}}
+]"""
+
+    try:
+        from agent.nodes import _get_llm
+        from langchain_core.messages import SystemMessage, HumanMessage
+
+        llm = _get_llm()
+        resp = llm.invoke([
+            SystemMessage(content="You are a precise data extractor. Return JSON array only."),
+            HumanMessage(content=prompt),
+        ])
+
+        content = resp.content.strip()
+        if content.startswith("```"):
+            content = content.split("\n", 1)[1]
+            if content.endswith("```"):
+                content = content[:-3]
+            content = content.strip()
+
+        items = json.loads(content)
+        parsed = []
+        for item in items:
+            if isinstance(item, dict) and item.get("name"):
+                parsed.append({
+                    "name": item["name"],
+                    "address": item.get("address", destination),
+                    "category": f"tavily.{interest}",
+                    "estimated_cost": float(item.get("estimated_cost", 15.0)),
+                    "indoor": bool(item.get("indoor", True)),
+                    "source": "tavily",
+                })
+        if parsed:
+            return parsed
+    except Exception:
+        pass
+
+    # Fallback heuristic if LLM extraction fails
     enriched = []
+    indoor_keywords = {"museum", "gallery", "mall", "restaurant", "cafe", "cinema", "spa", "aquarium", "indoor"}
     for r in results:
         title = r.get("title", "Activity").strip()
-        title_lower = title.lower()
-        if any(jw in title_lower for jw in junk_words):
-            continue
-
-        is_indoor = any(kw in title_lower for kw in indoor_keywords)
-        is_outdoor = any(kw in title_lower for kw in outdoor_keywords)
-        if not is_indoor and not is_outdoor:
-            is_indoor = interest in {"museums", "food", "shopping", "nightlife", "art", "wellness"}
-
+        clean_title = title.split(" - ")[0].split(" | ")[0]
         enriched.append({
-            "name": title,
+            "name": clean_title,
             "address": destination,
             "category": f"tavily.{interest}",
-            "indoor": is_indoor,
+            "estimated_cost": 15.0,
+            "indoor": any(kw in clean_title.lower() for kw in indoor_keywords),
             "source": "tavily",
-            "url": r.get("url", ""),
         })
     return enriched
 

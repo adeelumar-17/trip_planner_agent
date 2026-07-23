@@ -345,15 +345,23 @@ if plan_button:
                 card_class = "day-card rain" if is_bad else "day-card"
                 swap_badge = ' <span style="color: #e74c3c; font-weight: 600;">🔄 Weather Swap</span>' if is_swap else ""
 
+                location = activity.get("location", activity.get("address", destination))
+                act_cost = activity.get("estimated_cost", 0)
+                cost_text = f"${act_cost:.2f}" if act_cost > 0 else "Free entry"
+
                 html_content = (
                     f'<div class="{card_class}">'
                     f'<div style="display: flex; justify-content: space-between; align-items: center;">'
                     f'<h4 style="margin: 0; color: #333;">📅 {date_str}</h4>'
                     f'{swap_badge}'
                     f'</div>'
-                    f'<p style="color: #666; margin: 0.5rem 0;">🌡️ {day.get("weather", "N/A")}</p>'
-                    f'<p style="margin: 0.25rem 0;"><strong>🎯 {activity.get("name", "N/A")}</strong></p>'
-                    f'<p style="color: #888; font-size: 0.9rem; margin: 0;">{activity.get("reason", "")}</p>'
+                    f'<p style="color: #555; font-size: 0.9rem; margin: 0.4rem 0;">🌡️ {day.get("weather", "N/A")}</p>'
+                    f'<div style="background: #f8f9fa; padding: 0.75rem; border-radius: 8px; margin: 0.5rem 0; border: 1px solid #e9ecef;">'
+                    f'<p style="margin: 0; font-size: 1.05rem; color: #2c3e50;"><strong>🎯 {activity.get("name", "N/A")}</strong></p>'
+                    f'<p style="color: #666; font-size: 0.88rem; margin: 0.25rem 0;">📍 <strong>Location:</strong> {location}</p>'
+                    f'<p style="color: #27ae60; font-size: 0.88rem; margin: 0.25rem 0; font-weight: 600;">💵 <strong>Est. Activity Cost:</strong> {cost_text}</p>'
+                    f'<p style="color: #7f8c8d; font-size: 0.85rem; margin-top: 0.4rem; font-style: italic;">{activity.get("reason", "")}</p>'
+                    f'</div>'
                     f'</div>'
                 )
                 st.markdown(html_content, unsafe_allow_html=True)
