@@ -15,8 +15,11 @@ import os
 import requests
 from datetime import datetime, timedelta
 
-GEOAPIFY_KEY = os.getenv("GEOAPIFY_API_KEY", "")
-TAVILY_KEY = os.getenv("TAVILY_API_KEY", "")
+def _get_geoapify_key() -> str:
+    return os.getenv("GEOAPIFY_API_KEY", "")
+
+def _get_tavily_key() -> str:
+    return os.getenv("TAVILY_API_KEY", "")
 
 TIMEOUT = 15  # seconds for all HTTP calls
 
@@ -33,7 +36,7 @@ def geocode_destination(destination: str) -> dict:
     params = {
         "text": destination,
         "limit": 1,
-        "apiKey": GEOAPIFY_KEY,
+        "apiKey": _get_geoapify_key(),
     }
     try:
         resp = requests.get(url, params=params, timeout=TIMEOUT)
@@ -328,7 +331,7 @@ def _geoapify_places(
     lat: float, lon: float, categories: str, limit: int = 10
 ) -> list[dict]:
     """Low-level call to Geoapify Places API v2 with circle filter."""
-    if not GEOAPIFY_KEY:
+    if not _get_geoapify_key():
         return []
 
     url = "https://api.geoapify.com/v2/places"
@@ -336,7 +339,7 @@ def _geoapify_places(
         "categories": categories,
         "filter": f"circle:{lon},{lat},10000",  # 10 km radius
         "limit": limit,
-        "apiKey": GEOAPIFY_KEY,
+        "apiKey": _get_geoapify_key(),
     }
     headers = {"Accept": "application/json"}
     try:
@@ -427,11 +430,11 @@ def _tavily_activities_fallback(
 
 def _tavily_search(query: str, max_results: int = 5) -> list[dict]:
     """Execute a Tavily search. Returns [] on failure or missing key."""
-    if not TAVILY_KEY:
+    if not _get_tavily_key():
         return []
     try:
         from tavily import TavilyClient
-        client = TavilyClient(api_key=TAVILY_KEY)
+        client = TavilyClient(api_key=_get_tavily_key())
         response = client.search(query=query, max_results=max_results)
         return response.get("results", [])
     except Exception:

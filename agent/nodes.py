@@ -23,12 +23,18 @@ from agent.tools import (
 
 MAX_RETRIES = 3
 
-llm = ChatGroq(
-    model="llama-3.3-70b-versatile",
-    api_key=os.getenv("GROQ_API_KEY", ""),
-    temperature=0.3,
-    max_tokens=4096,
-)
+_llm_instance = None
+
+def _get_llm():
+    global _llm_instance
+    if _llm_instance is None:
+        _llm_instance = ChatGroq(
+            model="llama-3.3-70b-versatile",
+            api_key=os.getenv("GROQ_API_KEY", ""),
+            temperature=0.3,
+            max_tokens=4096,
+        )
+    return _llm_instance
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +217,7 @@ ACTIVITY OPTIONS:
 Create the day-by-day itinerary now. Remember: swap outdoor activities for indoor ones on bad weather days."""
 
     try:
-        response = llm.invoke([
+        response = _get_llm().invoke([
             SystemMessage(content=MERGE_SYSTEM_PROMPT),
             HumanMessage(content=user_msg),
         ])
